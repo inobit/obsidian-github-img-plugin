@@ -303,21 +303,21 @@ export default class GitHubImagePlugin extends Plugin {
 
       if (!imgElement) return
 
-      // Check if this is a GitHub image belonging to current config
-      if (!this.isCurrentRepoImage(imgElement)) return
+      // Get image URL - support all images
+      const imageUrl = imgElement.src || ''
+      if (!imageUrl) return
 
       // Prevent default context menu immediately
       e.preventDefault()
       e.stopPropagation()
 
-      // Get the actual GitHub URL (handle blob URLs for private repos)
-      const imageUrl = imgElement.src || ''
+      // Get the actual URL (handle blob URLs for private repos)
       let actualImageUrl = imageUrl
       if (actualImageUrl.startsWith('blob:')) {
         actualImageUrl = imgElement.getAttribute('data-github-img') || actualImageUrl
       }
 
-      // Show custom menu
+      // Show custom menu for ALL images
       this.showImageContextMenu(e, imgElement, actualImageUrl)
     }, true) // Use capture phase
   }
@@ -391,30 +391,41 @@ export default class GitHubImagePlugin extends Plugin {
 
   /**
    * Delete image with confirmation
+   * Always removes from document, only deletes from GitHub if it belongs to current repo
    */
   private async deleteImageWithConfirm(
     imgElement: HTMLImageElement,
     imageUrl: string
   ): Promise<void> {
-    const uploader = this.imgUploader as GitHubUploader | undefined
-    if (!uploader) {
-      new Notice('GitHub 上传器未配置')
-      return
-    }
+    // Check if this is a GitHub image that might need repo deletion
+    const isGitHubImage = imageUrl.includes('github-img://') ||
+                          imageUrl.includes('raw.githubusercontent.com')
 
-    const filePath = uploader.parseImageUrlToPath(imageUrl)
-    if (!filePath) {
-      new Notice('无法解析图片路径')
-      return
-    }
+    let fileName = '图片'
+    let shouldDeleteFromGitHub = false
+    let uploader: GitHubUploader | undefined
+    let filePath: string | null = null
 
-    const fileName = filePath.split('/').pop() || '图片'
+    // If it's a GitHub image, check if it belongs to current repo
+    if (isGitHubImage) {
+      uploader = this.imgUploader as GitHubUploader | undefined
+      if (uploader) {
+        filePath = uploader.parseImageUrlToPath(imageUrl)
+        if (filePath) {
+          // Check if belongs to current repo
+          const settings = this._settings
+          const ownerRepoPattern = `${settings.githubOwner}/${settings.githubRepo}`
+          shouldDeleteFromGitHub = imageUrl.includes(ownerRepoPattern)
+          fileName = filePath.split('/').pop() || '图片'
+        }
+      }
+    }
 
     // Show confirmation
     const confirmed = await this.confirmDelete(fileName)
     if (!confirmed) return
 
-    // Immediately remove from DOM (sync)
+    // ===== ALWAYS: Immediately remove from DOM (sync) =====
     imgElement.style.display = 'none'
 
     // Defer editor update (async)
@@ -422,16 +433,21 @@ export default class GitHubImagePlugin extends Plugin {
       this.removeImageLinkFromEditor(imageUrl)
     }, 0)
 
-    // Clean up cache
+    // Show document removal notification
+    new Notice('图片已从文档移除', 2000)
+
+    // Clean up cache if it exists
     if (privateImageCache.has(imageUrl)) {
       URL.revokeObjectURL(privateImageCache.get(imageUrl)!)
       privateImageCache.delete(imageUrl)
     }
 
-    // Delete from GitHub asynchronously (non-blocking)
-    this.deleteFromGitHubAsync(uploader, filePath, fileName).catch((e) => {
-      console.error('[GitHubImage] Background delete failed:', e)
-    })
+    // ===== CONDITIONAL: Delete from GitHub only if belongs to current repo =====
+    if (shouldDeleteFromGitHub && uploader && filePath) {
+      this.deleteFromGitHubAsync(uploader, filePath, fileName).catch((e) => {
+        console.error('[GitHubImage] Background delete failed:', e)
+      })
+    }
   }
 
   /**
@@ -499,6 +515,7 @@ export default class GitHubImagePlugin extends Plugin {
       })
 
       const cancelBtn = buttonContainer.createEl('button', { text: '取消' })
+      cancelBtn.setAttribute('tabindex', '0')
       cancelBtn.addEventListener('click', () => {
         modal.close()
         resolve(false)
@@ -508,10 +525,37 @@ export default class GitHubImagePlugin extends Plugin {
         text: '删除',
         attr: { style: 'background: #dc3545; color: white;' },
       })
+      deleteBtn.setAttribute('tabindex', '0')
       deleteBtn.addEventListener('click', () => {
         modal.close()
         resolve(true)
       })
+
+      // Keyboard navigation
+      const buttons = [cancelBtn, deleteBtn]
+      let currentIndex = 0
+
+      // Focus first button
+      setTimeout(() => cancelBtn.focus(), 0)
+
+      const handleKeydown = (e: KeyboardEvent) => {
+        if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+          e.preventDefault()
+          // Toggle between buttons (0 <-> 1)
+          currentIndex = currentIndex === 0 ? 1 : 0
+          buttons[currentIndex].focus()
+        } else if (e.key === 'Enter') {
+          e.preventDefault()
+          // Click the focused button
+          buttons[currentIndex].click()
+        } else if (e.key === 'Escape') {
+          e.preventDefault()
+          modal.close()
+          resolve(false)
+        }
+      }
+
+      modal.contentEl.addEventListener('keydown', handleKeydown)
 
       modal.open()
     })
@@ -728,6 +772,121 @@ export default class GitHubImagePlugin extends Plugin {
       name: 'Upload to GitHub',
       editorCheckCallback: this.editorCheckCallbackForLocalUpload,
     })
+    this.addCommand({
+      id: 'github-delete-image-under-cursor',
+      name: 'Delete image under cursor',
+      editorCheckCallback: this.editorCheckCallbackForDeleteImage,
+    })
+  }
+
+  private editorCheckCallbackForDeleteImage = (
+    checking: boolean,
+    editor: Editor,
+    ctx: MarkdownFileInfo,
+  ) => {
+    const imageInfo = this.findImageUnderCursor(editor, ctx)
+    if (!imageInfo) return false
+    if (checking) return true
+
+    void this.deleteImageFromCommand(imageInfo, editor)
+  }
+
+  /**
+   * Find image link under cursor (any image, not just GitHub)
+   */
+  private findImageUnderCursor(
+    editor: Editor,
+    ctx: MarkdownFileInfo,
+  ): { url: string; start: EditorPosition; end: EditorPosition } | null {
+    const cursor = editor.getCursor()
+    const content = editor.getValue()
+
+    // Regex to match ANY image markdown
+    const regex = /!\[([^\]]*)\]\(([^)]+)\)/g
+
+    let match: RegExpExecArray | null
+    while ((match = regex.exec(content)) !== null) {
+      const url = match[2]
+      const startIdx = match.index
+      const endIdx = startIdx + match[0].length
+
+      const startPos = this.indexToPosition(content, startIdx)
+      const endPos = this.indexToPosition(content, endIdx)
+
+      // Check if cursor is on the same line as the image
+      if (cursor.line >= startPos.line && cursor.line <= endPos.line) {
+        return { url, start: startPos, end: endPos }
+      }
+    }
+
+    return null
+  }
+
+  /**
+   * Convert string index to editor position
+   */
+  private indexToPosition(content: string, index: number): EditorPosition {
+    const lines = content.substring(0, index).split('\n')
+    const line = lines.length - 1
+    const ch = lines[lines.length - 1].length
+    return { line, ch }
+  }
+
+  /**
+   * Delete image from command
+   * Always removes from document, only deletes from GitHub if it belongs to current repo
+   */
+  private async deleteImageFromCommand(
+    imageInfo: { url: string; start: EditorPosition; end: EditorPosition },
+    editor: Editor,
+  ): Promise<void> {
+    const imageUrl = imageInfo.url
+    const isGitHubImage = imageUrl.includes('github-img://') ||
+                          imageUrl.includes('raw.githubusercontent.com')
+
+    let fileName = '图片'
+
+    // Check if it's current repo image (for GitHub deletion)
+    let shouldDeleteFromGitHub = false
+    let uploader: GitHubUploader | undefined
+    let filePath: string | null = null
+
+    if (isGitHubImage) {
+      uploader = this.imgUploader as GitHubUploader | undefined
+      if (uploader) {
+        filePath = uploader.parseImageUrlToPath(imageUrl)
+        if (filePath) {
+          const settings = this._settings
+          const ownerRepoPattern = `${settings.githubOwner}/${settings.githubRepo}`
+          // Only delete from GitHub if it belongs to current repo
+          shouldDeleteFromGitHub = imageUrl.includes(ownerRepoPattern)
+          fileName = filePath.split('/').pop() || '图片'
+        }
+      }
+    }
+
+    // Show confirmation
+    const confirmed = await this.confirmDelete(fileName)
+    if (!confirmed) return
+
+    // ===== ALWAYS: Immediately remove from editor (sync) =====
+    editor.replaceRange('', imageInfo.start, imageInfo.end)
+
+    // Show document removal notification
+    new Notice('图片已从文档移除', 2000)
+
+    // Clean up cache if it exists
+    if (privateImageCache.has(imageUrl)) {
+      URL.revokeObjectURL(privateImageCache.get(imageUrl)!)
+      privateImageCache.delete(imageUrl)
+    }
+
+    // ===== CONDITIONAL: Delete from GitHub only if belongs to current repo =====
+    if (shouldDeleteFromGitHub && uploader && filePath) {
+      this.deleteFromGitHubAsync(uploader, filePath, fileName).catch((e) => {
+        console.error('[GitHubImage] Background delete failed:', e)
+      })
+    }
   }
 
   private editorCheckCallbackForLocalUpload = (

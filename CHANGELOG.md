@@ -1,5 +1,23 @@
 # obsidian-github-image-plugin changelog
 
+## [3.1.0] - 2026-04-01
+
+### Added
+
+- **Image Delete Functionality**: Delete images from documents and GitHub repository
+  - Right-click on any image to show "Delete Image" context menu
+  - Command `github-delete-image-under-cursor` for Vim mode (`:deleteGithubImage`)
+  - Supports deleting all images from document (not just GitHub images)
+  - Only deletes from GitHub if image belongs to current configured repository
+  - Asynchronous deletion: document updates immediately, GitHub deletion happens in background
+  - Confirmation dialog with keyboard navigation (↑/↓ to switch, Enter to confirm, ESC to cancel)
+
+### Changed
+
+- Delete confirmation dialog now supports keyboard navigation
+
+[3.1.0]: https://github.com/inobit/obsidian-github-img-plugin/releases/tag/3.1.0
+
 ## [3.0.1] - 2026-04-01
 
 ### Changed
