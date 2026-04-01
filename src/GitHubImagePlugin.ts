@@ -5,6 +5,7 @@ import {
   MarkdownFileInfo,
   MarkdownView,
   Menu,
+  Modal,
   Notice,
   Plugin,
   ReferenceCache,
@@ -288,6 +289,232 @@ export default class GitHubImagePlugin extends Plugin {
 
     // Setup MutationObserver to handle private repo images globally
     this.setupPrivateImageHandler()
+    this.setupImageDeleteHandler()
+  }
+
+  /**
+   * Setup handler to add delete option to image context menu
+   */
+  private setupImageDeleteHandler(): void {
+    // Register context menu handler for images (use capture to intercept before Obsidian)
+    document.addEventListener('contextmenu', (e) => {
+      const target = e.target as HTMLElement
+      const imgElement = target.closest('img') as HTMLImageElement | null
+
+      if (!imgElement) return
+
+      // Check if this is a GitHub image belonging to current config
+      if (!this.isCurrentRepoImage(imgElement)) return
+
+      // Prevent default context menu immediately
+      e.preventDefault()
+      e.stopPropagation()
+
+      // Get the actual GitHub URL (handle blob URLs for private repos)
+      const imageUrl = imgElement.src || ''
+      let actualImageUrl = imageUrl
+      if (actualImageUrl.startsWith('blob:')) {
+        actualImageUrl = imgElement.getAttribute('data-github-img') || actualImageUrl
+      }
+
+      // Show custom menu
+      this.showImageContextMenu(e, imgElement, actualImageUrl)
+    }, true) // Use capture phase
+  }
+
+  /**
+   * Check if image belongs to current configured repository
+   */
+  private isCurrentRepoImage(imgElement: HTMLImageElement): boolean {
+    // Get the actual image URL - for blob URLs, check data attribute
+    let imageUrl = imgElement.src || ''
+
+    // For blob URLs (private repo images), get original URL from data attribute
+    if (imageUrl.startsWith('blob:')) {
+      const originalUrl = imgElement.getAttribute('data-github-img') || ''
+      if (originalUrl) {
+        imageUrl = originalUrl
+      } else {
+        return false
+      }
+    }
+
+    // Must be GitHub image
+    const isGitHubImage = imageUrl.includes('github-img://') ||
+                          imageUrl.includes('raw.githubusercontent.com')
+
+    if (!isGitHubImage) return false
+
+    // Parse URL and check against current settings
+    const settings = this._settings
+    if (!settings?.githubOwner || !settings?.githubRepo) return false
+
+    // Check if URL contains current owner/repo
+    const ownerRepoPattern = `${settings.githubOwner}/${settings.githubRepo}`
+    return imageUrl.includes(ownerRepoPattern)
+  }
+
+  /**
+   * Show custom context menu for image
+   */
+  private showImageContextMenu(
+    e: MouseEvent,
+    imgElement: HTMLImageElement,
+    imageUrl: string
+  ): void {
+    const menu = new Menu()
+
+    menu.addItem((item) => {
+      item
+        .setTitle('删除图片')
+        .setIcon('trash-2')
+        .setSection('danger')
+        .onClick(() => {
+          void this.deleteImageWithConfirm(imgElement, imageUrl)
+        })
+    })
+
+    menu.addSeparator()
+
+    menu.addItem((item) => {
+      item
+        .setTitle('复制图片地址')
+        .setIcon('link')
+        .onClick(() => {
+          void navigator.clipboard.writeText(imageUrl)
+          new Notice('图片 URL 已复制')
+        })
+    })
+
+    menu.showAtPosition({ x: e.clientX, y: e.clientY })
+  }
+
+  /**
+   * Delete image with confirmation
+   */
+  private async deleteImageWithConfirm(
+    imgElement: HTMLImageElement,
+    imageUrl: string
+  ): Promise<void> {
+    const uploader = this.imgUploader as GitHubUploader | undefined
+    if (!uploader) {
+      new Notice('GitHub 上传器未配置')
+      return
+    }
+
+    const filePath = uploader.parseImageUrlToPath(imageUrl)
+    if (!filePath) {
+      new Notice('无法解析图片路径')
+      return
+    }
+
+    const fileName = filePath.split('/').pop() || '图片'
+
+    // Show confirmation
+    const confirmed = await this.confirmDelete(fileName)
+    if (!confirmed) return
+
+    // Immediately remove from DOM (sync)
+    imgElement.style.display = 'none'
+
+    // Defer editor update (async)
+    setTimeout(() => {
+      this.removeImageLinkFromEditor(imageUrl)
+    }, 0)
+
+    // Clean up cache
+    if (privateImageCache.has(imageUrl)) {
+      URL.revokeObjectURL(privateImageCache.get(imageUrl)!)
+      privateImageCache.delete(imageUrl)
+    }
+
+    // Delete from GitHub asynchronously (non-blocking)
+    this.deleteFromGitHubAsync(uploader, filePath, fileName).catch((e) => {
+      console.error('[GitHubImage] Background delete failed:', e)
+    })
+  }
+
+  /**
+   * Remove image markdown link from editor
+   */
+  private removeImageLinkFromEditor(imageUrl: string): void {
+    try {
+      const editor = this.activeEditor
+      if (!editor) return
+
+      const content = editor.getValue()
+      const escapedUrl = imageUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const regex = new RegExp(`!\\[([^\\]]*)\\]\\(${escapedUrl}\\)`, 'g')
+
+      const newContent = content.replace(regex, '')
+      if (newContent !== content) {
+        editor.setValue(newContent)
+      }
+    } catch (e) {
+      console.error('[GitHubImage] Failed to update editor:', e)
+    }
+  }
+
+  /**
+   * Delete file from GitHub asynchronously
+   */
+  private async deleteFromGitHubAsync(
+    uploader: GitHubUploader,
+    filePath: string,
+    fileName: string,
+  ): Promise<void> {
+    try {
+      const sha = await uploader.getFileSha(filePath)
+      if (!sha) {
+        console.log('[GitHubImage] File already deleted or not found:', filePath)
+        return
+      }
+
+      await uploader.deleteFile(filePath, sha)
+      new Notice(`GitHub 图片 "${fileName}" 已删除`)
+    } catch (e) {
+      console.error('[GitHubImage] Failed to delete from GitHub:', e)
+      const message = e instanceof ApiError ? e.message : '删除失败'
+      new Notice(`GitHub 删除失败: ${fileName} - ${message}`, 5000)
+    }
+  }
+
+  /**
+   * Show delete confirmation dialog
+   */
+  private async confirmDelete(fileName: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      const modal = new Modal(this.app)
+      modal.titleEl.setText('确认删除')
+
+      const content = modal.contentEl
+      content.createEl('p', { text: `确定要删除 "${fileName}" 吗？` })
+      content.createEl('p', {
+        text: '这将同时删除 GitHub 仓库中的文件，且无法恢复。',
+        attr: { style: 'color: #dc3545; font-size: 0.9em;' },
+      })
+
+      const buttonContainer = content.createDiv({
+        attr: { style: 'display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px;' }
+      })
+
+      const cancelBtn = buttonContainer.createEl('button', { text: '取消' })
+      cancelBtn.addEventListener('click', () => {
+        modal.close()
+        resolve(false)
+      })
+
+      const deleteBtn = buttonContainer.createEl('button', {
+        text: '删除',
+        attr: { style: 'background: #dc3545; color: white;' },
+      })
+      deleteBtn.addEventListener('click', () => {
+        modal.close()
+        resolve(true)
+      })
+
+      modal.open()
+    })
   }
 
   /**

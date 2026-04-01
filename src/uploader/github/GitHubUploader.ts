@@ -133,9 +133,37 @@ export default class GitHubUploader {
   }
 
   /**
+   * Delete a file from GitHub repository
+   * @param path - The file path in the repository
+   * @param sha - The file SHA (required for deletion)
+   * @returns Promise<void>
+   */
+  async deleteFile(path: string, sha: string): Promise<void> {
+    const resp = await requestUrl({
+      url: `${GITHUB_API_BASE}/repos/${this.owner}/${this.repo}/contents/${path}`,
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+      body: JSON.stringify({
+        message: `Delete image ${path} via Obsidian`,
+        sha: sha,
+        branch: this.branch,
+      }),
+      throw: false,
+    })
+
+    if (resp.status >= 400) {
+      handleGitHubErrorResponse(resp)
+    }
+  }
+
+  /**
    * Get file SHA if it exists (needed for updates)
    */
-  private async getFileSha(path: string): Promise<string | undefined> {
+  async getFileSha(path: string): Promise<string | undefined> {
     try {
       const resp = await requestUrl({
         url: `${GITHUB_API_BASE}/repos/${this.owner}/${this.repo}/contents/${path}?ref=${this.branch}`,
@@ -156,6 +184,32 @@ export default class GitHubUploader {
     } catch {
       return undefined
     }
+  }
+
+  /**
+   * Parse image URL to get file path in repository
+   * @param imageUrl - The image URL (github-img:// or raw.githubusercontent.com)
+   * @returns string | null - The file path in repo, or null if not a GitHub image
+   */
+  parseImageUrlToPath(imageUrl: string): string | null {
+    // Private repo: github-img://owner/repo/branch/path
+    if (imageUrl.startsWith('github-img://')) {
+      const urlWithoutProtocol = imageUrl.replace('github-img://', '')
+      const pathParts = urlWithoutProtocol.split('/')
+      if (pathParts.length < 4) return null
+      // pathParts = [owner, repo, branch, ...path]
+      return pathParts.slice(3).join('/')
+    }
+
+    // Public repo: raw.githubusercontent.com/owner/repo/branch/path
+    if (imageUrl.includes('raw.githubusercontent.com')) {
+      const match = imageUrl.match(/raw\.githubusercontent\.com\/[^/]+\/[^/]+\/[^/]+\/(.+)$/)
+      if (match) {
+        return match[1]
+      }
+    }
+
+    return null
   }
 
   /**
