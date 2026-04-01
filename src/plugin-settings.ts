@@ -1,15 +1,17 @@
-import { UploadStrategy } from './UploadStrategy'
-
-export interface ImgurPluginSettings {
-  uploadStrategy: UploadStrategy
-  clientId: string
+export interface GitHubPluginSettings {
+  githubOwner: string
+  githubRepo: string
+  githubBranch: string
+  githubPath: string
   showRemoteUploadConfirmation: boolean
-  albumToUpload: string | undefined
+  isPrivateRepo: boolean
 }
 
-export const DEFAULT_SETTINGS: ImgurPluginSettings = {
-  uploadStrategy: 'ANONYMOUS_IMGUR',
-  clientId: null,
+export const DEFAULT_SETTINGS: GitHubPluginSettings = {
+  githubOwner: '',
+  githubRepo: '',
+  githubBranch: 'main',
+  githubPath: 'images',
   showRemoteUploadConfirmation: true,
-  albumToUpload: undefined,
+  isPrivateRepo: false,
 }

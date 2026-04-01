@@ -1,6 +1,6 @@
 import { ClickableToken, Editor, EditorPosition, MarkdownFileInfo, parseLinktext } from 'obsidian'
 
-import { IMGUR_POTENTIALLY_SUPPORTED_FILES_EXTENSIONS } from '../imgur/constants'
+const SUPPORTED_IMAGE_EXTENSIONS = ['jpeg', 'jpg', 'png', 'gif', 'webp', 'svg', 'bmp', 'tiff']
 
 function localEmbeddedImageExpectedBoundaries(
   from: ClickableToken,
@@ -27,7 +27,7 @@ export const findLocalFileUnderCursor = (editor: Editor, ctx: MarkdownFileInfo) 
   const lt = parseLinktext(clickable.text)
   const file = ctx.app.metadataCache.getFirstLinkpathDest(lt.path, ctx.file.path)
 
-  if (!IMGUR_POTENTIALLY_SUPPORTED_FILES_EXTENSIONS.includes(file.extension)) return null
+  if (!SUPPORTED_IMAGE_EXTENSIONS.includes(file.extension)) return null
 
   return {
     file,

@@ -11,7 +11,7 @@ export const sharedEsbuildConfig = {
   banner: {
     js: banner,
   },
-  entryPoints: ['src/ImgurPlugin.ts'],
+  entryPoints: ['src/GitHubImagePlugin.ts'],
   bundle: true,
   external: [
     'obsidian',

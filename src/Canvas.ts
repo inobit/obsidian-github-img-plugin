@@ -1,22 +1,22 @@
 import { Canvas } from 'obsidian'
 
-import ImgurPlugin from './ImgurPlugin'
+import type GitHubImagePlugin from './GitHubImagePlugin'
 import ImageUploadBlockingModal from './ui/ImageUploadBlockingModal'
 import RemoteUploadConfirmationDialog from './ui/RemoteUploadConfirmationDialog'
 import { allFilesAreImages } from './utils/FileList'
 import { buildPasteEventCopy } from './utils/events'
 
-export function createImgurCanvasPasteHandler(
-  plugin: ImgurPlugin,
+export function createCanvasPasteHandler(
+  plugin: GitHubImagePlugin,
   originalPasteHandler: (e: ClipboardEvent) => Promise<void>,
 ) {
   return function (e: ClipboardEvent) {
-    return imgurCanvasPaste.call(this, plugin, originalPasteHandler, e)
+    return canvasPaste.call(this, plugin, originalPasteHandler, e)
   }
 }
 
-async function imgurCanvasPaste(
-  plugin: ImgurPlugin,
+async function canvasPaste(
+  plugin: GitHubImagePlugin,
   originalPasteHandler: (e: ClipboardEvent) => Promise<void>,
   e: ClipboardEvent,
 ) {
@@ -55,13 +55,13 @@ async function imgurCanvasPaste(
   })
 }
 
-function uploadImageOnCanvas(canvas: Canvas, plugin: ImgurPlugin, e: ClipboardEvent) {
+function uploadImageOnCanvas(canvas: Canvas, plugin: GitHubImagePlugin, e: ClipboardEvent) {
   const modal = new ImageUploadBlockingModal(plugin.app)
   modal.open()
 
   const file = e.clipboardData.files[0]
   return plugin.imgUploader
-    .upload(file, plugin.settings.albumToUpload)
+    .upload(file)
     .then((url) => {
       if (!modal.isOpen) {
         return

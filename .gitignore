@@ -20,3 +20,7 @@ main.js
 coverage/
 
 test-results.xml
+
+# ai
+
+.claude

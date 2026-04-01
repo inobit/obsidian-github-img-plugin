@@ -1,29 +1,22 @@
-import { ImgurPluginSettings } from 'src/plugin-settings'
+import type { GitHubPluginSettings } from '../plugin-settings'
 
-import AuthenticatedImgurClient from '../imgur/AuthenticatedImgurClient'
-import { IMGUR_ACCESS_TOKEN_LOCALSTORAGE_KEY } from '../imgur/constants'
+import { GITHUB_TOKEN_LOCALSTORAGE_KEY } from '../github/constants'
 import ImageUploader from './ImageUploader'
-import ImgurAnonymousUploader from './imgur/ImgurAnonymousUploader'
-import ImgurAuthenticatedUploader from './imgur/ImgurAuthenticatedUploader'
+import GitHubUploader from './github/GitHubUploader'
 
-export default function buildUploaderFrom(
-  settings: ImgurPluginSettings,
-): ImageUploader | undefined {
-  if (settings.uploadStrategy === 'AUTHENTICATED_IMGUR') {
-    const accessToken = localStorage.getItem(IMGUR_ACCESS_TOKEN_LOCALSTORAGE_KEY)
+export default function buildUploaderFrom(settings: GitHubPluginSettings): ImageUploader | undefined {
+  const token = localStorage.getItem(GITHUB_TOKEN_LOCALSTORAGE_KEY)
 
-    if (!accessToken) {
-      return undefined
-    }
-
-    return new ImgurAuthenticatedUploader(new AuthenticatedImgurClient(accessToken))
-  } else if (settings.uploadStrategy === 'ANONYMOUS_IMGUR') {
-    if (settings.clientId) {
-      return new ImgurAnonymousUploader(settings.clientId)
-    } else {
-      return undefined
-    }
-  } else {
-    return settings.uploadStrategy satisfies never
+  if (!settings.githubOwner || !settings.githubRepo || !token) {
+    return undefined
   }
+
+  return new GitHubUploader(
+    settings.githubOwner,
+    settings.githubRepo,
+    settings.githubBranch || 'main',
+    settings.githubPath || '',
+    token,
+    settings.isPrivateRepo,
+  )
 }
