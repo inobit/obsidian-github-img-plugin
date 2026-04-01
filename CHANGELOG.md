@@ -1,5 +1,18 @@
 # obsidian-github-image-plugin changelog
 
+## [3.0.1] - 2026-04-01
+
+### Changed
+
+- **Image Filename**: Changed filename format from timestamp to readable date
+  - Format: `YYYY-MM-DD-random.ext` (e.g., `2026-04-01-a3f8b2.png`)
+  - More human-readable and easier to browse
+
+### Fixed
+
+- Updated CI/CD workflow to use maintained `softprops/action-gh-release`
+- Updated `package.json` with correct project name and metadata
+
 ## [3.0.0] - 2026-04-01
 
 **BREAKING CHANGE**: Complete migration from Imgur to GitHub
@@ -82,6 +95,7 @@ Now you have a choice:
 - Works by providing `client_id` manually
 - Only supports paste action
 
+[3.0.1]: https://github.com/inobit/obsidian-github-img-plugin/releases/tag/3.0.1
 [3.0.0]: https://github.com/inobit/obsidian-github-img-plugin/releases/tag/3.0.0
 [2.0.0]: https://github.com/gavvvr/obsidian-imgur-plugin/releases/tag/2.0.0
 [1.2.0]: https://github.com/gavvvr/obsidian-imgur-plugin/releases/tag/1.2.0
