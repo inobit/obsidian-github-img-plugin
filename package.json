@@ -1,6 +1,6 @@
 {
-  "name": "obsidian-imgur-plugin",
-  "description": "This plugin uploads images from your clipboard to imgur.com and embeds uploaded image to your note",
+  "name": "obsidian-github-image-plugin",
+  "description": "Upload images to GitHub repository instead of storing them locally in your vault",
   "main": "main.js",
   "type": "module",
   "private": true,
@@ -22,9 +22,10 @@
   },
   "keywords": [
     "obsidian.md",
-    "imgur.com"
+    "github",
+    "image-upload"
   ],
-  "author": "Kirill Gavrilov",
+  "author": "inobit",
   "license": "MIT",
   "devDependencies": {
     "@commitlint/cli": "19.6.1",
