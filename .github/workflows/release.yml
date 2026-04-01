@@ -6,7 +6,7 @@ on:
       - '*'
 
 env:
-  PLUGIN_NAME: imgur
+  PLUGIN_NAME: github-image
 
 jobs:
   build:
