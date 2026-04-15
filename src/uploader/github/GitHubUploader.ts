@@ -198,9 +198,12 @@ export default class GitHubUploader {
    * @returns string | null - The file path in repo, or null if not a GitHub image
    */
   parseImageUrlToPath(imageUrl: string): string | null {
+    // Remove query parameters and hash
+    const cleanUrl = imageUrl.split('?')[0].split('#')[0]
+
     // Private repo: github-img://owner/repo/branch/path
-    if (imageUrl.startsWith('github-img://')) {
-      const urlWithoutProtocol = imageUrl.replace('github-img://', '')
+    if (cleanUrl.startsWith('github-img://')) {
+      const urlWithoutProtocol = cleanUrl.replace('github-img://', '')
       const pathParts = urlWithoutProtocol.split('/')
       if (pathParts.length < 4) return null
       // pathParts = [owner, repo, branch, ...path]
@@ -208,8 +211,16 @@ export default class GitHubUploader {
     }
 
     // Public repo: raw.githubusercontent.com/owner/repo/branch/path
-    if (imageUrl.includes('raw.githubusercontent.com')) {
-      const match = /raw\.githubusercontent\.com\/[^/]+\/[^/]+\/[^/]+\/(.+)$/.exec(imageUrl)
+    if (cleanUrl.includes('raw.githubusercontent.com')) {
+      const match = /raw\.githubusercontent\.com\/[^/]+\/[^/]+\/[^/]+\/(.+)$/.exec(cleanUrl)
+      if (match) {
+        return match[1]
+      }
+    }
+
+    // CDN: cdn.jsdelivr.net/gh/owner/repo@branch/path
+    if (cleanUrl.includes('cdn.jsdelivr.net')) {
+      const match = /cdn\.jsdelivr\.net\/gh\/[^/]+\/[^/]+@[^/]+\/(.+)$/.exec(cleanUrl)
       if (match) {
         return match[1]
       }

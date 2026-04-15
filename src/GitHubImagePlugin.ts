@@ -371,6 +371,15 @@ export default class GitHubImagePlugin extends Plugin {
   }
 
   /**
+   * Check if URL is a GitHub image
+   */
+  private isGitHubImageUrl(imageUrl: string): boolean {
+    return imageUrl.includes('github-img://') ||
+           imageUrl.includes('raw.githubusercontent.com') ||
+           imageUrl.includes('cdn.jsdelivr.net')
+  }
+
+  /**
    * Check if image belongs to current configured repository
    */
   private isCurrentRepoImage(imgElement: HTMLImageElement): boolean {
@@ -388,11 +397,7 @@ export default class GitHubImagePlugin extends Plugin {
     }
 
     // Must be GitHub image
-    const isGitHubImage = imageUrl.includes('github-img://') ||
-                          imageUrl.includes('raw.githubusercontent.com') ||
-                          imageUrl.includes('cdn.jsdelivr.net')
-
-    if (!isGitHubImage) return false
+    if (!this.isGitHubImageUrl(imageUrl)) return false
 
     // Parse URL and check against configured repos
     const settings = this._settings
@@ -480,8 +485,7 @@ export default class GitHubImagePlugin extends Plugin {
     imageUrl: string
   ): Promise<void> {
     // Check if this is a GitHub image that might need repo deletion
-    const isGitHubImage = imageUrl.includes('github-img://') ||
-                          imageUrl.includes('raw.githubusercontent.com')
+    const isGitHubImage = this.isGitHubImageUrl(imageUrl)
 
     let fileName = '图片'
     let shouldDeleteFromGitHub = false
@@ -494,42 +498,49 @@ export default class GitHubImagePlugin extends Plugin {
       const settings = this._settings
       let owner: string | undefined
       let repo: string | undefined
+      let branch: string | undefined
 
-      // Parse URL to get owner/repo
+      // Parse URL to get owner/repo/branch
       if (imageUrl.includes('github-img://')) {
         const parts = imageUrl.replace('github-img://', '').split('/')
-        if (parts.length >= 2) {
+        if (parts.length >= 3) {
           owner = parts[0]
           repo = parts[1]
+          branch = parts[2]
         }
       } else if (imageUrl.includes('raw.githubusercontent.com')) {
-        const match = /raw\.githubusercontent\.com\/([^/]+)\/([^/]+)/.exec(imageUrl)
+        const match = /raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)/.exec(imageUrl)
         if (match) {
           owner = match[1]
           repo = match[2]
+          branch = match[3]
         }
       } else if (imageUrl.includes('cdn.jsdelivr.net')) {
-        const match = /cdn\.jsdelivr\.net\/gh\/([^/]+)\/([^/]+)/.exec(imageUrl)
+        const match = /cdn\.jsdelivr\.net\/gh\/([^/]+)\/([^/]+)@([^/]+)/.exec(imageUrl)
         if (match) {
           owner = match[1]
           repo = match[2]
+          branch = match[3]
         }
       }
 
-      if (owner && repo) {
+      if (owner && repo && branch) {
         // Check if matches public repo
         if (settings.publicRepo?.owner === owner && settings.publicRepo?.repo === repo) {
           const token = localStorage.getItem(GITHUB_TOKEN_PUBLIC_KEY) || ''
-          uploader = new GitHubUploader(
-            settings.publicRepo.owner,
-            settings.publicRepo.repo,
-            settings.publicRepo.branch || 'main',
-            settings.publicRepo.path || '',
-            token,
-            false,
-            settings.publicRepo.useCdn ?? true
-          )
-          shouldDeleteFromGitHub = true
+          // Only attempt deletion if token is available
+          if (token) {
+            uploader = new GitHubUploader(
+              settings.publicRepo.owner,
+              settings.publicRepo.repo,
+              branch, // Use branch from URL, not from settings
+              settings.publicRepo.path || '',
+              token,
+              false,
+              settings.publicRepo.useCdn ?? true
+            )
+            shouldDeleteFromGitHub = true
+          }
         }
         // Check if matches private repo
         else if (settings.privateRepo?.owner === owner && settings.privateRepo?.repo === repo) {
@@ -538,7 +549,7 @@ export default class GitHubImagePlugin extends Plugin {
             uploader = new GitHubUploader(
               settings.privateRepo.owner,
               settings.privateRepo.repo,
-              settings.privateRepo.branch || 'main',
+              branch, // Use branch from URL, not from settings
               settings.privateRepo.path || '',
               token,
               true,
@@ -558,7 +569,7 @@ export default class GitHubImagePlugin extends Plugin {
     }
 
     // Show confirmation
-    const confirmed = await this.confirmDelete(fileName)
+    const confirmed = await this.confirmDelete(fileName, isGitHubImage)
     if (!confirmed) return
 
     // ===== ALWAYS: Immediately remove from DOM (sync) =====
@@ -634,17 +645,20 @@ export default class GitHubImagePlugin extends Plugin {
   /**
    * Show delete confirmation dialog
    */
-  private async confirmDelete(fileName: string): Promise<boolean> {
+  private async confirmDelete(fileName: string, isGitHubImage = false): Promise<boolean> {
     return new Promise((resolve) => {
       const modal = new Modal(this.app)
       modal.titleEl.setText('确认删除')
 
       const content = modal.contentEl
       content.createEl('p', { text: `确定要删除 "${fileName}" 吗？` })
-      content.createEl('p', {
-        text: '这将同时删除 GitHub 仓库中的文件，且无法恢复。',
-        attr: { style: 'color: #dc3545; font-size: 0.9em;' },
-      })
+
+      if (isGitHubImage) {
+        content.createEl('p', {
+          text: '这将同时删除 GitHub 仓库中的文件，且无法恢复。',
+          attr: { style: 'color: #dc3545; font-size: 0.9em;' },
+        })
+      }
 
       const buttonContainer = content.createDiv({
         attr: { style: 'display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px;' }
@@ -995,8 +1009,7 @@ export default class GitHubImagePlugin extends Plugin {
     editor: Editor,
   ): Promise<void> {
     const imageUrl = imageInfo.url
-    const isGitHubImage = imageUrl.includes('github-img://') ||
-                          imageUrl.includes('raw.githubusercontent.com')
+    const isGitHubImage = this.isGitHubImageUrl(imageUrl)
 
     let fileName = '图片'
 
@@ -1074,7 +1087,7 @@ export default class GitHubImagePlugin extends Plugin {
     }
 
     // Show confirmation
-    const confirmed = await this.confirmDelete(fileName)
+    const confirmed = await this.confirmDelete(fileName, isGitHubImage)
     if (!confirmed) return
 
     // ===== ALWAYS: Immediately remove from editor (sync) =====
