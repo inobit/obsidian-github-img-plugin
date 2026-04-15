@@ -19,7 +19,7 @@ jobs:
           fetch-depth: 1
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version-file: '.node-version'
       - name: Install pnpm
         uses: pnpm/action-setup@v4
       - name: Environment details
