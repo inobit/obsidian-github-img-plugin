@@ -1,27 +1,43 @@
-import { Canvas } from 'obsidian'
+import { App, Canvas } from 'obsidian'
 
 import type GitHubImagePlugin from './GitHubImagePlugin'
+
 import ImageUploadBlockingModal from './ui/ImageUploadBlockingModal'
 import RemoteUploadConfirmationDialog from './ui/RemoteUploadConfirmationDialog'
-import { allFilesAreImages } from './utils/FileList'
+import ImageUploader from './uploader/ImageUploader'
 import { buildPasteEventCopy } from './utils/events'
+import { allFilesAreImages } from './utils/FileList'
 
 export function createCanvasPasteHandler(
   plugin: GitHubImagePlugin,
   originalPasteHandler: (e: ClipboardEvent) => Promise<void>,
 ) {
-  return function (e: ClipboardEvent) {
+  return function (this: { app: App; canvas: Canvas }, e: ClipboardEvent) {
     return canvasPaste.call(this, plugin, originalPasteHandler, e)
   }
 }
 
 async function canvasPaste(
+  this: { app: App; canvas: Canvas },
   plugin: GitHubImagePlugin,
   originalPasteHandler: (e: ClipboardEvent) => Promise<void>,
   e: ClipboardEvent,
 ) {
   const { files } = e.clipboardData
   if (!allFilesAreImages(files) || files.length != 1) {
+    void originalPasteHandler.call(this, e)
+    return
+  }
+
+  // Get uploader based on current file (for Canvas, use default behavior)
+  // Canvas doesn't have a file path context, so we try to get uploader and fallback if not available
+  const activeFile = plugin.app.workspace.getActiveFile()
+  const uploader = activeFile
+    ? plugin.getUploaderForCurrentFile()
+    : undefined
+
+  if (!uploader) {
+    // No uploader available, use default behavior
     void originalPasteHandler.call(this, e)
     return
   }
@@ -48,21 +64,20 @@ async function canvasPaste(
     }
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
   const canvas: Canvas = this.canvas
-  uploadImageOnCanvas(canvas, plugin, buildPasteEventCopy(e, files)).catch(() => {
+  uploadImageOnCanvas(canvas, this.app, uploader, buildPasteEventCopy(e, files)).catch(() => {
     void originalPasteHandler.call(this, e)
   })
 }
 
-function uploadImageOnCanvas(canvas: Canvas, plugin: GitHubImagePlugin, e: ClipboardEvent) {
-  const modal = new ImageUploadBlockingModal(plugin.app)
+function uploadImageOnCanvas(canvas: Canvas, app: App, uploader: ImageUploader, e: ClipboardEvent) {
+  const modal = new ImageUploadBlockingModal(app)
   modal.open()
 
   const file = e.clipboardData.files[0]
-  return plugin.imgUploader
+  return uploader
     .upload(file)
-    .then((url) => {
+    .then((url: string) => {
       if (!modal.isOpen) {
         return
       }
@@ -70,7 +85,7 @@ function uploadImageOnCanvas(canvas: Canvas, plugin: GitHubImagePlugin, e: Clipb
       modal.close()
       pasteRemoteImageToCanvas(canvas, url)
     })
-    .catch((err) => {
+    .catch((err: Error) => {
       modal.close()
       throw err
     })

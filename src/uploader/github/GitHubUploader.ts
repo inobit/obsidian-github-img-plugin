@@ -1,13 +1,12 @@
 import { requestUrl, RequestUrlResponse } from 'obsidian'
 
-import ApiError from '../ApiError'
 import { GITHUB_API_BASE } from '../../github/constants'
 import {
   type GitHubContentResponse,
   type GitHubCreateContentRequest,
-  type GitHubCreateContentResponse,
   type GitHubErrorResponse,
 } from '../../github/githubApiTypes'
+import ApiError from '../ApiError'
 
 export function handleGitHubErrorResponse(resp: RequestUrlResponse): void {
   if (resp.headers['content-type']?.includes('application/json')) {
@@ -24,6 +23,7 @@ export default class GitHubUploader {
   private readonly basePath: string
   private readonly token: string
   private readonly isPrivateRepo: boolean
+  private readonly useCdn: boolean
 
   constructor(
     owner: string,
@@ -32,6 +32,7 @@ export default class GitHubUploader {
     basePath: string,
     token: string,
     isPrivateRepo: boolean,
+    useCdn = false,
   ) {
     this.owner = owner
     this.repo = repo
@@ -39,6 +40,7 @@ export default class GitHubUploader {
     this.basePath = basePath
     this.token = token
     this.isPrivateRepo = isPrivateRepo
+    this.useCdn = useCdn
   }
 
   /**
@@ -83,14 +85,18 @@ export default class GitHubUploader {
       handleGitHubErrorResponse(resp)
     }
 
-    const responseData = resp.json as GitHubCreateContentResponse
-
     // For private repos, we need to use API to fetch content
-    // For public repos, we can use raw.githubusercontent.com
+    // For public repos, we can use raw.githubusercontent.com or CDN
     if (this.isPrivateRepo) {
       // Return a special URL format that the plugin will handle
       // Format: github-img://owner/repo/branch/path
       return `github-img://${this.owner}/${this.repo}/${this.branch}/${path}`
+    }
+
+    // Public repo: use CDN or raw URL
+    if (this.useCdn) {
+      // jsDelivr CDN format: https://cdn.jsdelivr.net/gh/owner/repo@branch/path
+      return `https://cdn.jsdelivr.net/gh/${this.owner}/${this.repo}@${this.branch}/${path}`
     }
 
     // Public repo: use raw URL
@@ -203,7 +209,7 @@ export default class GitHubUploader {
 
     // Public repo: raw.githubusercontent.com/owner/repo/branch/path
     if (imageUrl.includes('raw.githubusercontent.com')) {
-      const match = imageUrl.match(/raw\.githubusercontent\.com\/[^/]+\/[^/]+\/[^/]+\/(.+)$/)
+      const match = /raw\.githubusercontent\.com\/[^/]+\/[^/]+\/[^/]+\/(.+)$/.exec(imageUrl)
       if (match) {
         return match[1]
       }

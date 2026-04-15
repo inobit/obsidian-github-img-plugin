@@ -1,4 +1,5 @@
 export interface RepoConfig {
+  enabled: boolean
   owner: string
   repo: string
   branch: string
@@ -7,18 +8,9 @@ export interface RepoConfig {
 }
 
 export interface GitHubPluginSettings {
-  // 向后兼容：旧配置字段
-  githubOwner?: string
-  githubRepo?: string
-  githubBranch?: string
-  githubPath?: string
-  isPrivateRepo?: boolean
-
-  // 新配置
   publicRepo?: RepoConfig
   privateRepo?: RepoConfig
   privateDirectories: string[]
-
   showRemoteUploadConfirmation: boolean
 }
 

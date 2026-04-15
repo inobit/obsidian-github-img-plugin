@@ -1,5 +1,4 @@
 export const GITHUB_API_BASE = 'https://api.github.com'
-export const GITHUB_TOKEN_LOCALSTORAGE_KEY = 'github-img-plugin-token'
 export const GITHUB_TOKEN_PUBLIC_KEY = 'github-img-plugin-token-public'
 export const GITHUB_TOKEN_PRIVATE_KEY = 'github-img-plugin-token-private'
 export const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com'

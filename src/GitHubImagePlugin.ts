@@ -12,22 +12,28 @@ import {
   TFile,
 } from 'obsidian'
 
-import { createCanvasPasteHandler } from './Canvas'
 import DragEventCopy from './aux-event-classes/DragEventCopy'
 import PasteEventCopy from './aux-event-classes/PasteEventCopy'
-import { GITHUB_TOKEN_LOCALSTORAGE_KEY } from './github/constants'
-import type GitHubUploader from './uploader/github/GitHubUploader'
+import { createCanvasPasteHandler } from './Canvas'
+import {
+  GITHUB_TOKEN_PRIVATE_KEY,
+  GITHUB_TOKEN_PUBLIC_KEY,
+} from './github/constants'
 import { DEFAULT_SETTINGS, type GitHubPluginSettings } from './plugin-settings'
 import GitHubPluginSettingsTab from './ui/GitHubPluginSettingsTab'
 import InfoModal from './ui/InfoModal'
 import RemoteUploadConfirmationDialog from './ui/RemoteUploadConfirmationDialog'
 import UpdateLinksConfirmationModal from './ui/UpdateLinksConfirmationModal'
 import ApiError from './uploader/ApiError'
+import GitHubUploader from './uploader/github/GitHubUploader'
 import ImageUploader from './uploader/ImageUploader'
-import buildUploaderFrom from './uploader/imgUploaderFactory'
-import { allFilesAreImages } from './utils/FileList'
+import {
+  getUploaderForFile,
+  isPrivateDocument,
+} from './uploader/imgUploaderFactory'
 import { findLocalFileUnderCursor, replaceFirstOccurrence } from './utils/editor'
-import { fixImageTypeIfNeeded, removeReferenceIfPresent } from './utils/misc'
+import { allFilesAreImages } from './utils/FileList'
+import { removeReferenceIfPresent } from './utils/misc'
 import {
   filesAndLinksStatsFrom,
   getAllCachedReferencesForFile,
@@ -55,10 +61,19 @@ export default class GitHubImagePlugin extends Plugin {
     return this._settings
   }
 
-  private _imgUploader: ImageUploader
+  // Dynamic uploader getter based on current file
+  getUploaderForCurrentFile(): ImageUploader | undefined {
+    const activeFile = this.app.workspace.getActiveFile()
+    if (!activeFile) return undefined
 
-  get imgUploader(): ImageUploader {
-    return this._imgUploader
+    return getUploaderForFile(activeFile.path, this._settings)
+  }
+
+  // Helper: check if current file is in private directory
+  private isCurrentFilePrivate(): boolean {
+    const activeFile = this.app.workspace.getActiveFile()
+    if (!activeFile) return false
+    return isPrivateDocument(activeFile.path, this._settings.privateDirectories)
   }
 
   private customPasteEventCallback = async (
@@ -68,14 +83,26 @@ export default class GitHubImagePlugin extends Plugin {
   ) => {
     if (e instanceof PasteEventCopy) return
 
-    if (!this.imgUploader) {
-      GitHubImagePlugin.showUnconfiguredPluginNotice()
-      return
-    }
-
     const { files } = e.clipboardData
 
     if (!allFilesAreImages(files)) return
+
+    // Dynamic uploader based on current file
+    const uploader = this.getUploaderForCurrentFile()
+
+    if (!uploader) {
+      // Show friendly notice
+      const isPrivate = this.isCurrentFilePrivate()
+      if (isPrivate) {
+        new Notice('Private 仓库未配置，图片将保存到本地', 5000)
+      } else {
+        new Notice('Public 仓库未配置，图片将保存到本地', 5000)
+      }
+
+      // Let Obsidian handle default behavior
+      markdownView.currentMode.clipboardManager.handlePaste(new PasteEventCopy(e))
+      return
+    }
 
     e.preventDefault()
 
@@ -102,7 +129,7 @@ export default class GitHubImagePlugin extends Plugin {
     }
 
     for (const file of files) {
-      this.uploadFileAndEmbedImage(file).catch(() => {
+      this.uploadFileAndEmbedImage(file, uploader).catch(() => {
         markdownView.currentMode.clipboardManager.handlePaste(new PasteEventCopy(e))
       })
     }
@@ -110,11 +137,6 @@ export default class GitHubImagePlugin extends Plugin {
 
   private customDropEventListener = async (e: DragEvent, _: Editor, markdownView: MarkdownView) => {
     if (e instanceof DragEventCopy) return
-
-    if (!this.imgUploader) {
-      GitHubImagePlugin.showUnconfiguredPluginNotice()
-      return
-    }
 
     if (e.dataTransfer.types.length !== 1 || e.dataTransfer.types[0] !== 'Files') {
       return
@@ -124,6 +146,20 @@ export default class GitHubImagePlugin extends Plugin {
     const { files } = e.dataTransfer
 
     if (!allFilesAreImages(files)) return
+
+    // Dynamic uploader based on current file
+    const uploader = this.getUploaderForCurrentFile()
+
+    if (!uploader) {
+      // Show friendly notice
+      const isPrivate = this.isCurrentFilePrivate()
+      if (isPrivate) {
+        new Notice('Private 仓库未配置，图片将保存到本地', 5000)
+      } else {
+        new Notice('Public 仓库未配置，图片将保存到本地', 5000)
+      }
+      return
+    }
 
     e.preventDefault()
 
@@ -157,7 +193,7 @@ export default class GitHubImagePlugin extends Plugin {
     const promises: Promise<any>[] = []
     const filesFailedToUpload: File[] = []
     for (const image of files) {
-      const uploadPromise = this.uploadFileAndEmbedImage(image).catch(() => {
+      const uploadPromise = this.uploadFileAndEmbedImage(image, uploader).catch(() => {
         filesFailedToUpload.push(image)
       })
       promises.push(uploadPromise)
@@ -189,7 +225,16 @@ export default class GitHubImagePlugin extends Plugin {
   private async doUploadLocalImage(imageInEditor: LocalImageInEditor) {
     const { image, editor, noteFile } = imageInEditor
     const { file: imageFile, start, end } = image
-    const imageUrl = await this.uploadLocalImageFromEditor(editor, imageFile, start, end)
+
+    // Get uploader based on the note file path
+    const uploader = getUploaderForFile(noteFile.path, this._settings)
+    if (!uploader) {
+      const isPrivate = isPrivateDocument(noteFile.path, this._settings.privateDirectories)
+      new Notice(`${isPrivate ? 'Private' : 'Public'} 仓库未配置，无法上传`, 5000)
+      return
+    }
+
+    const imageUrl = await this.uploadLocalImageFromEditor(editor, imageFile, start, end, uploader)
     this.proposeToReplaceOtherLocalLinksIfAny(imageFile, imageUrl, {
       path: noteFile.path,
       startPosition: start,
@@ -250,11 +295,12 @@ export default class GitHubImagePlugin extends Plugin {
     file: TFile,
     start: EditorPosition,
     end: EditorPosition,
+    uploader: ImageUploader,
   ) {
     const arrayBuffer = await this.app.vault.readBinary(file)
     const fileToUpload = new File([arrayBuffer], file.name)
     editor.replaceRange('\n', end, end)
-    const imageUrl = await this.uploadFileAndEmbedImage(fileToUpload, {
+    const imageUrl = await this.uploadFileAndEmbedImage(fileToUpload, uploader, {
       ch: 0,
       line: end.line + 1,
     })
@@ -263,9 +309,11 @@ export default class GitHubImagePlugin extends Plugin {
   }
 
   private async loadSettings() {
+    const loaded = (await this.loadData()) as GitHubPluginSettings
+
     this._settings = {
       ...DEFAULT_SETTINGS,
-      ...((await this.loadData()) as GitHubPluginSettings),
+      ...loaded,
     }
   }
 
@@ -299,7 +347,7 @@ export default class GitHubImagePlugin extends Plugin {
     // Register context menu handler for images (use capture to intercept before Obsidian)
     document.addEventListener('contextmenu', (e) => {
       const target = e.target as HTMLElement
-      const imgElement = target.closest('img') as HTMLImageElement | null
+      const imgElement = target.closest('img')
 
       if (!imgElement) return
 
@@ -341,17 +389,51 @@ export default class GitHubImagePlugin extends Plugin {
 
     // Must be GitHub image
     const isGitHubImage = imageUrl.includes('github-img://') ||
-                          imageUrl.includes('raw.githubusercontent.com')
+                          imageUrl.includes('raw.githubusercontent.com') ||
+                          imageUrl.includes('cdn.jsdelivr.net')
 
     if (!isGitHubImage) return false
 
-    // Parse URL and check against current settings
+    // Parse URL and check against configured repos
     const settings = this._settings
-    if (!settings?.githubOwner || !settings?.githubRepo) return false
+    let owner: string | undefined
+    let repo: string | undefined
 
-    // Check if URL contains current owner/repo
-    const ownerRepoPattern = `${settings.githubOwner}/${settings.githubRepo}`
-    return imageUrl.includes(ownerRepoPattern)
+    if (imageUrl.includes('github-img://')) {
+      const parts = imageUrl.replace('github-img://', '').split('/')
+      if (parts.length >= 2) {
+        owner = parts[0]
+        repo = parts[1]
+      }
+    } else if (imageUrl.includes('raw.githubusercontent.com')) {
+      const match = /raw\.githubusercontent\.com\/([^/]+)\/([^/]+)/.exec(imageUrl)
+      if (match) {
+        owner = match[1]
+        repo = match[2]
+      }
+    } else if (imageUrl.includes('cdn.jsdelivr.net')) {
+      const match = /cdn\.jsdelivr\.net\/gh\/([^/]+)\/([^/]+)/.exec(imageUrl)
+      if (match) {
+        owner = match[1]
+        repo = match[2]
+      }
+    }
+
+    if (!owner || !repo) return false
+
+    // Check if matches public or private repo
+    const publicRepo = settings.publicRepo
+    const privateRepo = settings.privateRepo
+
+    if (publicRepo && publicRepo.owner === owner && publicRepo.repo === repo) {
+      return true
+    }
+
+    if (privateRepo && privateRepo.owner === owner && privateRepo.repo === repo) {
+      return true
+    }
+
+    return false
   }
 
   /**
@@ -408,15 +490,69 @@ export default class GitHubImagePlugin extends Plugin {
 
     // If it's a GitHub image, check if it belongs to current repo
     if (isGitHubImage) {
-      uploader = this.imgUploader as GitHubUploader | undefined
-      if (uploader) {
-        filePath = uploader.parseImageUrlToPath(imageUrl)
-        if (filePath) {
-          // Check if belongs to current repo
-          const settings = this._settings
-          const ownerRepoPattern = `${settings.githubOwner}/${settings.githubRepo}`
-          shouldDeleteFromGitHub = imageUrl.includes(ownerRepoPattern)
-          fileName = filePath.split('/').pop() || '图片'
+      // Try to determine which repo this image belongs to
+      const settings = this._settings
+      let owner: string | undefined
+      let repo: string | undefined
+
+      // Parse URL to get owner/repo
+      if (imageUrl.includes('github-img://')) {
+        const parts = imageUrl.replace('github-img://', '').split('/')
+        if (parts.length >= 2) {
+          owner = parts[0]
+          repo = parts[1]
+        }
+      } else if (imageUrl.includes('raw.githubusercontent.com')) {
+        const match = /raw\.githubusercontent\.com\/([^/]+)\/([^/]+)/.exec(imageUrl)
+        if (match) {
+          owner = match[1]
+          repo = match[2]
+        }
+      } else if (imageUrl.includes('cdn.jsdelivr.net')) {
+        const match = /cdn\.jsdelivr\.net\/gh\/([^/]+)\/([^/]+)/.exec(imageUrl)
+        if (match) {
+          owner = match[1]
+          repo = match[2]
+        }
+      }
+
+      if (owner && repo) {
+        // Check if matches public repo
+        if (settings.publicRepo?.owner === owner && settings.publicRepo?.repo === repo) {
+          const token = localStorage.getItem(GITHUB_TOKEN_PUBLIC_KEY) || ''
+          uploader = new GitHubUploader(
+            settings.publicRepo.owner,
+            settings.publicRepo.repo,
+            settings.publicRepo.branch || 'main',
+            settings.publicRepo.path || '',
+            token,
+            false,
+            settings.publicRepo.useCdn ?? true
+          )
+          shouldDeleteFromGitHub = true
+        }
+        // Check if matches private repo
+        else if (settings.privateRepo?.owner === owner && settings.privateRepo?.repo === repo) {
+          const token = localStorage.getItem(GITHUB_TOKEN_PRIVATE_KEY) || ''
+          if (token) {
+            uploader = new GitHubUploader(
+              settings.privateRepo.owner,
+              settings.privateRepo.repo,
+              settings.privateRepo.branch || 'main',
+              settings.privateRepo.path || '',
+              token,
+              true,
+              false
+            )
+            shouldDeleteFromGitHub = true
+          }
+        }
+
+        if (uploader) {
+          filePath = uploader.parseImageUrlToPath(imageUrl)
+          if (filePath) {
+            fileName = filePath.split('/').pop() || '图片'
+          }
         }
       }
     }
@@ -438,7 +574,7 @@ export default class GitHubImagePlugin extends Plugin {
 
     // Clean up cache if it exists
     if (privateImageCache.has(imageUrl)) {
-      URL.revokeObjectURL(privateImageCache.get(imageUrl)!)
+      URL.revokeObjectURL(privateImageCache.get(imageUrl))
       privateImageCache.delete(imageUrl)
     }
 
@@ -606,7 +742,7 @@ export default class GitHubImagePlugin extends Plugin {
       const imgElement = img as HTMLImageElement
       if (imgElement.hasAttribute('data-github-img-processing')) continue
 
-      const src = imgElement.getAttribute('src')!
+      const src = imgElement.getAttribute('src')
       imgElement.setAttribute('data-github-img-processing', 'true')
       imgElement.removeAttribute('src')
       imgElement.setAttribute('data-github-img', src)
@@ -701,11 +837,6 @@ export default class GitHubImagePlugin extends Plugin {
    * @throws ApiError or Error on failure
    */
   private async fetchPrivateImageAsBlob(githubImgUrl: string): Promise<string> {
-    const uploader = this.imgUploader as GitHubUploader | undefined
-    if (!uploader) {
-      throw new Error('GitHub 上传器未配置，请先配置插件设置')
-    }
-
     // Parse URL: github-img://owner/repo/branch/path/to/file
     const urlWithoutProtocol = githubImgUrl.replace('github-img://', '')
     const pathParts = urlWithoutProtocol.split('/')
@@ -713,7 +844,37 @@ export default class GitHubImagePlugin extends Plugin {
       throw new Error('图片链接格式无效')
     }
 
+    const owner = pathParts[0]
+    const repo = pathParts[1]
+    const branch = pathParts[2]
     const filePath = pathParts.slice(3).join('/')
+
+    // Check if the private repo is configured and matches
+    const privateConfig = this._settings.privateRepo
+    if (!privateConfig) {
+      throw new Error('Private 仓库未配置')
+    }
+
+    if (privateConfig.owner !== owner || privateConfig.repo !== repo) {
+      throw new Error('Private 仓库配置不匹配')
+    }
+
+    const token = localStorage.getItem(GITHUB_TOKEN_PRIVATE_KEY)
+    if (!token) {
+      throw new Error('Private 仓库 Token 未配置')
+    }
+
+    // Create temporary uploader for this request
+    const uploader = new GitHubUploader(
+      owner,
+      repo,
+      branch,
+      privateConfig.path || '',
+      token,
+      true,
+      false
+    )
+
     const content = await uploader.getFileContent(filePath)
 
     // Convert base64 to blob
@@ -733,16 +894,8 @@ export default class GitHubImagePlugin extends Plugin {
   }
 
   setupImagesUploader(): void {
-    const uploader = buildUploaderFrom(this._settings)
-    this._imgUploader = uploader
-    if (!uploader) return
-
-    // eslint-disable-next-line @typescript-eslint/unbound-method
-    const originalUploadFunction = uploader.upload
-    uploader.upload = function (image: File) {
-      if (!uploader) return
-      return originalUploadFunction.call(uploader, fixImageTypeIfNeeded(image))
-    }
+    // This method is kept for backward compatibility
+    // Uploaders are now created dynamically based on file path
   }
 
   private setupHandlers() {
@@ -796,7 +949,8 @@ export default class GitHubImagePlugin extends Plugin {
    */
   private findImageUnderCursor(
     editor: Editor,
-    ctx: MarkdownFileInfo,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    _ctx: MarkdownFileInfo,
   ): { url: string; start: EditorPosition; end: EditorPosition } | null {
     const cursor = editor.getCursor()
     const content = editor.getValue()
@@ -852,15 +1006,69 @@ export default class GitHubImagePlugin extends Plugin {
     let filePath: string | null = null
 
     if (isGitHubImage) {
-      uploader = this.imgUploader as GitHubUploader | undefined
-      if (uploader) {
-        filePath = uploader.parseImageUrlToPath(imageUrl)
-        if (filePath) {
-          const settings = this._settings
-          const ownerRepoPattern = `${settings.githubOwner}/${settings.githubRepo}`
-          // Only delete from GitHub if it belongs to current repo
-          shouldDeleteFromGitHub = imageUrl.includes(ownerRepoPattern)
-          fileName = filePath.split('/').pop() || '图片'
+      // Try to determine which repo this image belongs to
+      const settings = this._settings
+      let owner: string | undefined
+      let repo: string | undefined
+
+      // Parse URL to get owner/repo
+      if (imageUrl.includes('github-img://')) {
+        const parts = imageUrl.replace('github-img://', '').split('/')
+        if (parts.length >= 2) {
+          owner = parts[0]
+          repo = parts[1]
+        }
+      } else if (imageUrl.includes('raw.githubusercontent.com')) {
+        const match = /raw\.githubusercontent\.com\/([^/]+)\/([^/]+)/.exec(imageUrl)
+        if (match) {
+          owner = match[1]
+          repo = match[2]
+        }
+      } else if (imageUrl.includes('cdn.jsdelivr.net')) {
+        const match = /cdn\.jsdelivr\.net\/gh\/([^/]+)\/([^/]+)/.exec(imageUrl)
+        if (match) {
+          owner = match[1]
+          repo = match[2]
+        }
+      }
+
+      if (owner && repo) {
+        // Check if matches public repo
+        if (settings.publicRepo?.owner === owner && settings.publicRepo?.repo === repo) {
+          const token = localStorage.getItem(GITHUB_TOKEN_PUBLIC_KEY) || ''
+          uploader = new GitHubUploader(
+            settings.publicRepo.owner,
+            settings.publicRepo.repo,
+            settings.publicRepo.branch || 'main',
+            settings.publicRepo.path || '',
+            token,
+            false,
+            settings.publicRepo.useCdn ?? true
+          )
+          shouldDeleteFromGitHub = true
+        }
+        // Check if matches private repo
+        else if (settings.privateRepo?.owner === owner && settings.privateRepo?.repo === repo) {
+          const token = localStorage.getItem(GITHUB_TOKEN_PRIVATE_KEY) || ''
+          if (token) {
+            uploader = new GitHubUploader(
+              settings.privateRepo.owner,
+              settings.privateRepo.repo,
+              settings.privateRepo.branch || 'main',
+              settings.privateRepo.path || '',
+              token,
+              true,
+              false
+            )
+            shouldDeleteFromGitHub = true
+          }
+        }
+
+        if (uploader) {
+          filePath = uploader.parseImageUrlToPath(imageUrl)
+          if (filePath) {
+            fileName = filePath.split('/').pop() || '图片'
+          }
         }
       }
     }
@@ -877,7 +1085,7 @@ export default class GitHubImagePlugin extends Plugin {
 
     // Clean up cache if it exists
     if (privateImageCache.has(imageUrl)) {
-      URL.revokeObjectURL(privateImageCache.get(imageUrl)!)
+      URL.revokeObjectURL(privateImageCache.get(imageUrl))
       privateImageCache.delete(imageUrl)
     }
 
@@ -924,13 +1132,19 @@ export default class GitHubImagePlugin extends Plugin {
     )
   }
 
-  private async uploadFileAndEmbedImage(file: File, atPos?: EditorPosition) {
+  private async uploadFileAndEmbedImage(file: File, uploader?: ImageUploader, atPos?: EditorPosition) {
+    const actualUploader = uploader || this.getUploaderForCurrentFile()
+
+    if (!actualUploader) {
+      throw new Error('Uploader not available')
+    }
+
     const pasteId = generatePseudoRandomId()
     this.insertTemporaryText(pasteId, atPos)
 
     let imgUrl: string
     try {
-      imgUrl = await this.imgUploader.upload(file)
+      imgUrl = await actualUploader.upload(file)
     } catch (e) {
       if (e instanceof ApiError) {
         this.handleFailedUpload(
