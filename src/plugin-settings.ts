@@ -1,17 +1,28 @@
+export interface RepoConfig {
+  owner: string
+  repo: string
+  branch: string
+  path: string
+  useCdn?: boolean
+}
+
 export interface GitHubPluginSettings {
-  githubOwner: string
-  githubRepo: string
-  githubBranch: string
-  githubPath: string
+  // 向后兼容：旧配置字段
+  githubOwner?: string
+  githubRepo?: string
+  githubBranch?: string
+  githubPath?: string
+  isPrivateRepo?: boolean
+
+  // 新配置
+  publicRepo?: RepoConfig
+  privateRepo?: RepoConfig
+  privateDirectories: string[]
+
   showRemoteUploadConfirmation: boolean
-  isPrivateRepo: boolean
 }
 
 export const DEFAULT_SETTINGS: GitHubPluginSettings = {
-  githubOwner: '',
-  githubRepo: '',
-  githubBranch: 'main',
-  githubPath: 'images',
+  privateDirectories: [],
   showRemoteUploadConfirmation: true,
-  isPrivateRepo: false,
 }
