@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "module": "ESNext",
     "target": "es2022",
     "lib": [
@@ -13,6 +13,9 @@
       "expect-webdriverio",
       "@wdio/mocha-framework"
     ],
+    "paths": {
+      "obsidian": ["../../node_modules/obsidian"]
+    },
     "skipLibCheck": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,
@@ -26,5 +29,6 @@
   "include": [
     "specs",
     "**/*.ts",
+    "types"
   ],
 }

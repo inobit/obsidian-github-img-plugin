@@ -1,12 +1,12 @@
-import ImgurPlugin from '../../../src/ImgurPlugin'
-import { IMGUR_PLUGIN_ID } from '../constants'
+import GitHubImagePlugin from '../../../src/GitHubImagePlugin'
+import { GITHUB_PLUGIN_ID } from '../constants'
 
 declare module 'obsidian' {
   interface App {
     plugins: {
       plugins: {
         [index: string]: Plugin
-        [IMGUR_PLUGIN_ID]: ImgurPlugin
+        [GITHUB_PLUGIN_ID]: GitHubImagePlugin
       }
       setEnable(toggle: boolean): void
       enablePlugin(pluginId: string): void

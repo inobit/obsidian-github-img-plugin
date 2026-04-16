@@ -1,10 +1,12 @@
+// Use type-only import to avoid runtime resolution issues
+import type { EditorPosition } from 'obsidian'
+
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 
-import { App, EditorPosition } from 'obsidian'
 import { Key } from 'webdriverio'
 
-import { IMGUR_PLUGIN_ID, TEST_VAULT_DIR } from '../../constants'
+import { GITHUB_PLUGIN_ID, TEST_VAULT_DIR } from '../../constants'
 import CanvasCard from './canvas-card.page'
 import ObsidianSettings from './obsidian-settings.page'
 
@@ -26,7 +28,7 @@ class ObsidianApp {
       ipcRenderer.sendSync('vault-open', testVaultDir, shouldCreateNewVault)
     }, TEST_VAULT_DIR)
 
-    const targetPluginsDir = `${TEST_VAULT_DIR}/.obsidian/plugins/${IMGUR_PLUGIN_ID}/`
+    const targetPluginsDir = `${TEST_VAULT_DIR}/.obsidian/plugins/${GITHUB_PLUGIN_ID}/`
     await fs.mkdir(targetPluginsDir, { recursive: true })
     await fs.copyFile('manifest.json', `${targetPluginsDir}/manifest.json`)
     await fs.copyFile('main.js', `${targetPluginsDir}/main.js`)
@@ -40,16 +42,15 @@ class ObsidianApp {
     await browser.switchWindow('app://obsidian.md/index.html')
   }
 
-  async activateImgurPlugin() {
-    await this.activatePlugin(IMGUR_PLUGIN_ID)
+  async activateGitHubImagePlugin() {
+    await this.activatePlugin(GITHUB_PLUGIN_ID)
   }
 
   private async activatePlugin(pluginId: string) {
-    await browser.execute((imgurPluginId: string) => {
-      // @ts-expect-error 'app' exists in Obsidian
-      declare const app: App
+    await browser.execute((id: string) => {
+      const app = (window as any).app
       app.plugins.setEnable(true)
-      app.plugins.enablePlugin(imgurPluginId)
+      app.plugins.enablePlugin(id)
     }, pluginId)
   }
 
@@ -60,8 +61,7 @@ class ObsidianApp {
 
   async openSettings() {
     await browser.execute(() => {
-      // @ts-expect-error 'app' exists in Obsidian
-      declare const app: App
+      const app = (window as any).app
       app.commands.executeCommandById('app:open-settings')
     })
     return ObsidianSettings
@@ -92,23 +92,45 @@ class ObsidianApp {
     const noteContent = $('.workspace-leaf.mod-active .cm-contentContainer')
     await noteContent.click()
     if (content) {
-      await browser.execute((content: string) => {
-        // @ts-expect-error 'app' exists in Obsidian
-        declare const app: App
-        app.workspace.activeEditor!.editor!.setValue(content)
+      await browser.execute((noteContent: string) => {
+        const app = (window as any).app
+        app.workspace.activeEditor!.editor!.setValue(noteContent)
       }, content)
     }
   }
 
-  async resizeToSmallThumbnailUsingCommandPalette() {
+  async createNoteInDirectory(dirPath: string, content?: string) {
+    // Create directory structure and note
+    const fullDirPath = path.join(TEST_VAULT_DIR, dirPath)
+    await fs.mkdir(fullDirPath, { recursive: true })
+
+    const noteName = 'test-note.md'
+    const notePath = path.join(fullDirPath, noteName)
+    await fs.writeFile(notePath, content || '')
+
+    // Open the note in Obsidian
+    await browser.execute(
+      (relativePath: string) => {
+        const app = (window as any).app
+        const abstractFile = app.vault.getAbstractFileByPath(relativePath)
+
+        if (abstractFile && abstractFile.extension === 'md') {
+          app.workspace.getLeaf().openFile(abstractFile)
+        }
+      },
+      path.join(dirPath, noteName).replace(/\\/g, '/'),
+    )
+  }
+
+  async deleteGitHubImageUsingCommandPalette() {
     await this.openCommandPalette()
-    await this.fuzzySearchResizeToSmallThumbnail()
+    await browser.keys('Delete GitHub Image')
     await this.hitEnter()
   }
 
-  async uploadToImgurUsingCommandPalette() {
+  async uploadLocalImageToGitHubUsingCommandPalette() {
     await this.openCommandPalette()
-    await browser.keys('Upload to Imgur')
+    await browser.keys('Upload local image to GitHub')
     await this.hitEnter()
   }
 
@@ -116,27 +138,25 @@ class ObsidianApp {
     await browser.keys([Key.Ctrl, 'p'])
   }
 
-  private async fuzzySearchResizeToSmallThumbnail() {
-    await browser.keys('resize small thumb')
-  }
-
   private async hitEnter() {
     await browser.keys(Key.Enter)
   }
 
-  async getTextFromOpenedNote() {
+  async getTextFromOpenedNote(): Promise<string> {
     return await browser.execute(() => {
-      // @ts-expect-error 'app' exists in Obsidian
-      declare const app: App
-      return app.workspace.activeEditor!.editor!.getValue()
+      const app = (
+        window as unknown as {
+          app: { workspace: { activeEditor: { editor: { getValue: () => string } } } }
+        }
+      ).app
+      return app.workspace.activeEditor.editor.getValue()
     })
   }
 
   async setCursorPositionInActiveNote(position: EditorPosition) {
-    await browser.execute((position: EditorPosition) => {
-      // @ts-expect-error 'app' exists in Obsidian
-      declare const app: App
-      app.workspace.activeEditor!.editor!.setCursor(position)
+    await browser.execute((pos: EditorPosition) => {
+      const app = (window as any).app
+      app.workspace.activeEditor!.editor!.setCursor(pos)
     }, position)
   }
 
@@ -163,8 +183,34 @@ class ObsidianApp {
     await $('button=Upload').click()
   }
 
+  async cancelUpload() {
+    await $('button=Cancel').click()
+  }
+
+  async confirmDelete() {
+    await $('button=Delete').click()
+  }
+
   async confirmReplacingAllLinks() {
     await $('//div[@class="modal"]//button[text()="Yes"]').click()
+  }
+
+  async getNoticeText(): Promise<string | null> {
+    const notice = $('.notice')
+    if (await notice.isExisting()) {
+      return await notice.getText()
+    }
+    return null
+  }
+
+  async waitForNoticeContaining(text: string, timeout = 5000) {
+    await browser.waitUntil(
+      async () => {
+        const noticeText = await this.getNoticeText()
+        return noticeText?.includes(text) || false
+      },
+      { timeout, timeoutMsg: `Expected notice containing "${text}"` },
+    )
   }
 }
 
