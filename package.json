@@ -65,7 +65,7 @@
     "*.{ts,js,css,md}": "prettier --write",
     "*.ts": "eslint --cache --fix"
   },
-  "packageManager": "pnpm@9.15.4",
+  "packageManager": "pnpm@10.26.1",
   "engines": {
     "node": ">=24.0.0"
   }
