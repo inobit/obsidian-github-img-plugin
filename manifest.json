@@ -1,7 +1,7 @@
 {
   "id": "obsidian-github-image-plugin",
   "name": "GitHub Image",
-  "version": "3.0.0",
+  "version": "3.2.0",
   "minAppVersion": "0.13.19",
   "description": "Upload images to GitHub repository instead of storing them locally in your vault",
   "author": "inobit",
