@@ -10,17 +10,19 @@
 
 **包管理器**: pnpm (详见 package.json 中的 `packageManager`)
 
+**Node.js**: >= 24.0.0 (详见 package.json 中的 `engines`)
+
 ### 常用命令
 
-| 命令 | 用途 |
-|---------|---------|
-| `npm run dev` | 启动开发模式，在 Obsidian 仓库中支持热重载（交互式仓库选择） |
-| `npm run build` | 生产构建（TypeScript 检查 + esbuild 打包到 `main.js`） |
-| `npm run build-fast` | 不进行类型检查的生产构建 |
-| `npm run test` | 运行 Vitest 单元测试并生成覆盖率报告 |
-| `npm run test:e2e` | 运行 WebdriverIO 端到端测试（需要先构建） |
-| `npm run test:eslint` | 使用缓存运行 ESLint |
-| `npm run commit` | 使用 Commitizen 进行规范提交 |
+| 命令                  | 用途                                                         |
+| --------------------- | ------------------------------------------------------------ |
+| `npm run dev`         | 启动开发模式，在 Obsidian 仓库中支持热重载（交互式仓库选择） |
+| `npm run build`       | 生产构建（TypeScript 检查 + esbuild 打包到 `main.js`）       |
+| `npm run build-fast`  | 不进行类型检查的生产构建                                     |
+| `npm run test`        | 运行 Vitest 单元测试并生成覆盖率报告                         |
+| `npm run test:e2e`    | 运行 WebdriverIO 端到端测试（需要先 build）                  |
+| `npm run test:eslint` | 使用缓存运行 ESLint                                          |
+| `npm run commit`      | 使用 Commitizen 进行规范提交                                 |
 
 ### 运行单个测试
 
@@ -43,29 +45,43 @@ npx vitest --watch
 
 ### 上传器
 
-- **`src/uploader/ImageUploader.ts`**: 简单接口，定义 `upload(image: File): Promise<string>`
+- **`src/uploader/ImageUploader.ts`**: 简单接口，定义 `upload(image: File, fileName?: string): Promise<string>`
 - **`src/uploader/github/GitHubUploader.ts`**: GitHub API 上传器，使用 GitHub Contents API 上传文件
-- **`src/uploader/imgUploaderFactory.ts`**: 工厂函数，从设置和 localStorage 构建 GitHubUploader
+  - GitHub API 版本: `2022-11-28`
+  - 支持 CDN 加速（public 仓库可通过 `useCdn` 启用 jsDelivr）
+- **`src/uploader/imgUploaderFactory.ts`**: 工厂函数，从设置和 localStorage 构建 GitHubUploader，支持根据文件路径动态选择仓库
 
 ### GitHub API 客户端
 
 - **`src/github/GitHubUploader.ts`**: 封装 GitHub API 调用
   - `upload()`: 上传图片到指定仓库路径
   - `getFileContent()`: 获取文件内容（用于私有仓库图片显示）
+  - `deleteFile()`: 删除仓库中的图片文件
 - **`src/github/constants.ts`**: GitHub API 基础 URL 和 localStorage 键名
+  - Token 存储键: `github-img-plugin-token-public` / `github-img-plugin-token-private`
 - **`src/github/githubApiTypes.ts`**: GitHub API 响应的 TypeScript 类型
+
+### 多仓库配置 (Dual Repository Support)
+
+插件支持根据文件路径自动选择不同的 GitHub 仓库：
+
+- **Public 仓库**: 默认仓库，用于普通文档的图片上传
+- **Private 仓库**: 用于特定目录下的文档（通过 `privateDirectories` 配置）
+- **动态选择**: 通过 `isPrivateDocument()` 检查文件路径是否匹配私有目录前缀
+
+Token 分别存储：
+
+- Public: `localStorage.getItem('github-img-plugin-token-public')`
+- Private: `localStorage.getItem('github-img-plugin-token-private')`
 
 ### 设置
 
 - **`src/plugin-settings.ts`**: 设置接口和默认值
-  - `githubOwner`: GitHub 用户名/组织
-  - `githubRepo`: 仓库名
-  - `githubBranch`: 分支名（默认 main）
-  - `githubPath`: 图片存储路径
-  - `isPrivateRepo`: 是否为私有仓库
+  - `publicRepo` / `privateRepo`: 仓库配置（owner, repo, branch, path, enabled, useCdn）
+  - `privateDirectories`: 使用 private 仓库的目录列表
   - `showRemoteUploadConfirmation`: 上传前确认
 - **`src/ui/GitHubPluginSettingsTab.ts`**: 设置界面
-  - Token 使用密码输入框，存储在 localStorage（`github-img-plugin-token`）
+  - Token 使用密码输入框，存储在 localStorage
   - 提供 "Test Connection" 按钮测试配置
 
 ### 图片处理
@@ -75,13 +91,21 @@ npx vitest --watch
 - **Canvas 支持**: `Canvas.ts` 处理 Obsidian Canvas 视图中的图片粘贴
 - **本地图片上传**: 右键菜单将现有本地图片上传到 GitHub
 
+### 图片删除
+
+- **右键删除**: 在预览模式下右键图片可删除（显示 "Delete from GitHub" 菜单项）
+- **命令面板**: 提供 "Delete GitHub Image" 命令删除光标下的图片
+- **确认对话框**: 删除前需要用户确认，避免误操作
+- **GitHub API**: 通过 DELETE 请求删除文件，需要先获取文件 SHA
+- **引用更新**: 删除成功后自动更新笔记中的图片链接为占位符
+
 ### 私有仓库图片显示
 
 **关键实现** (`GitHubImagePlugin.ts`):
 
 1. **CSS 预隐藏**: 添加全局 CSS 隐藏 `img[src^="github-img://"]`，防止浏览器尝试加载无效协议
 2. **MutationObserver**: 监听 DOM 变化，在图片添加到 DOM 时立即处理
-3. **转换为 blob URL**: 
+3. **转换为 blob URL**:
    - 截取 `src` 属性，保存到 `data-github-img`
    - 调用 GitHub API 获取 base64 内容
    - 转换为 Blob 并创建 blob URL
@@ -92,6 +116,7 @@ npx vitest --watch
 ### UI 组件
 
 `src/ui/` 中的组件：
+
 - `GitHubPluginSettingsTab.ts`: 设置面板（GitHub 配置）
 - `RemoteUploadConfirmationDialog.ts`: 上传前的可选确认
 - `UpdateLinksConfirmationModal.ts`: 更新引用本地图片的其他笔记
@@ -102,7 +127,7 @@ npx vitest --watch
 
 - **`src/utils/obsidian-vault.ts`**: Vault 操作（查找引用、跨文件替换链接）
 - **`src/utils/editor.ts`**: 编辑器操作辅助函数
-- **`src/utils/misc.ts`**: 杂项工具（图片类型修复等）
+- **`src/utils/misc.ts`**: 杂项工具（图片类型修复、GitHub URL 解析等）
 - **`src/utils/events.ts`**: 事件工具函数
 - **`src/aux-event-classes/`**: 事件包装类，用于防止无限循环
 
@@ -125,7 +150,7 @@ npx vitest --watch
 ## 测试
 
 - **单元测试**: Vitest，使用 v8 覆盖率提供程序
-- **端到端测试**: WebdriverIO，使用 Electron 服务 (`test/e2e/`)
+- **端到端测试**: WebdriverIO，使用 Electron 服务 (`test/e2e/`)，需要先运行 `build-fast`
 - 覆盖率报告: lcov 和 HTML 格式
 
 ## 代码风格
@@ -138,7 +163,7 @@ npx vitest --watch
 
 ## 重要实现说明
 
-1. **Token 存储**: GitHub Personal Access Token 存储在 `localStorage.getItem('github-img-plugin-token')`，不会随 vault 数据同步
+1. **Token 存储**: GitHub Personal Access Token 存储在 localStorage（`github-img-plugin-token-public` / `github-img-plugin-token-private`），不会随 vault 数据同步
 
 2. **GitHub API 速率限制**: 每小时 5000 次请求（认证用户）
 
@@ -149,3 +174,9 @@ npx vitest --watch
 5. **临时文本**: 上传期间，插入临时 Markdown（`![Uploading file...id]()`），完成后替换为最终图片 URL
 
 6. **错误提示**: 图片加载失败时显示友好中文提示，console 保持简洁技术日志
+
+7. **CDN 支持**: Public 仓库可配置使用 jsDelivr CDN 加速访问（`useCdn: true`）
+
+8. **多仓库支持**: 根据文件路径自动选择 public/private 仓库配置，实现敏感文档和普通文档的分离存储
+
+9. **文件名格式**: 上传图片使用 `YYYY-MM-DD-random.ext` 格式避免冲突
